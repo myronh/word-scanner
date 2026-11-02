@@ -46,6 +46,10 @@
   #cross line{stroke:#fff;stroke-width:1.8;stroke-linecap:round}
   #cross circle.dot{fill:var(--accent)}
   #cross.hit{animation:hit .35s ease-out}
+  #cross.spin .prog{animation:spin .9s linear infinite}
+  @keyframes spin{from{transform:rotate(-90deg)}to{transform:rotate(270deg)}}
+  .spacer{width:48px;height:48px}
+  #shutter:disabled{opacity:.45}
   @keyframes hit{0%{transform:translate(-50%,-50%) scale(1)}40%{transform:translate(-50%,-50%) scale(1.25)}100%{transform:translate(-50%,-50%) scale(1)}}
 
   /* 狀態列 */
@@ -153,19 +157,17 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
     </button>
     <button id="shutter" aria-label="立即擷取"><span></span></button>
-    <button class="round" id="pauseBtn" aria-label="暫停自動偵測">
-      <svg viewBox="0 0 24 24" id="pauseIcon"><line x1="9" y1="6" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
-    </button>
+    <div class="spacer"></div>
   </div>
 </div>
 
 <div id="intro">
   <h1>準星<b>查單字</b></h1>
-  <p>把十字對準書本或螢幕上的英文單字，停住一下就會自動查詢。</p>
+  <p>把十字對準書本或螢幕上的英文單字，按下按鈕就會查詢。</p>
   <ol>
     <li>按下「開始」並允許使用相機</li>
-    <li>十字對準單字，保持不動</li>
-    <li>黃色圈跑滿就會擷取並顯示翻譯</li>
+    <li>十字對準要查的單字</li>
+    <li>按下方的圓形按鈕，擷取最靠近十字中心的單字</li>
   </ol>
   <button class="primary" id="startBtn">開始</button>
   <div id="introErr"></div>
@@ -196,16 +198,6 @@
 <section class="sheet" id="settingsSheet" aria-label="設定">
   <div class="grip"></div>
   <h2>設定</h2>
-  <div class="row">
-    <label>停留時間 <span class="val" id="dwellVal"></span></label>
-    <input type="range" id="dwell" min="0.2" max="3" step="0.1">
-    <div class="hint">十字停在單字上多久後自動擷取</div>
-  </div>
-  <div class="row">
-    <label>穩定門檻 <span class="val" id="thrVal"></span></label>
-    <input type="range" id="thr" min="3" max="40" step="1">
-    <div class="hint">數字越大越容易判定為「停住」；手會抖的話可以調高</div>
-  </div>
   <div class="row">
     <label>發音 <select id="accent"><option value="en-US">美式</option><option value="en-GB">英式</option></select></label>
   </div>
@@ -253,7 +245,6 @@
       await startCamera();
       $('#intro').style.display = 'none';
       enterScan();
-      requestAnimationFrame(tick);
     } catch (e) {
       $('#introErr').textContent = cameraErrorText(e);
     }
@@ -321,62 +312,29 @@
     scanbox.style.height = (r.h * r.scale) + 'px';
   }
 
-  // ---------- 穩定偵測 ----------
-  const SW = 48, SH = 24;
-  const sCanvas = document.createElement('canvas'); sCanvas.width = SW; sCanvas.height = SH;
-  const sctx = sCanvas.getContext('2d', { willReadFrequently: true });
-
-  function sample(){
-    const r = cropRect();
-    const sw = r.w * 0.42, sh = r.h * 0.7;
-    sctx.drawImage(video, (video.videoWidth - sw) / 2, (video.videoHeight - sh) / 2, sw, sh, 0, 0, SW, SH);
-    const d = sctx.getImageData(0, 0, SW, SH).data;
-    const g = new Float32Array(SW * SH);
-    let sum = 0;
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) { g[j] = d[i] * .299 + d[i+1] * .587 + d[i+2] * .114; sum += g[j]; }
-    const mean = sum / g.length;
-    let v = 0; for (let j = 0; j < g.length; j++) v += (g[j] - mean) ** 2;
-    const std = Math.sqrt(v / g.length);
-    let diff = null;
-    if (prevSample) { let s = 0; for (let j = 0; j < g.length; j++) s += Math.abs(g[j] - prevSample[j]); diff = s / g.length; }
-    prevSample = g;
-    return { diff, std };
+  // ---------- 待機 ----------
+  function setBusy(on){
+    cross.classList.toggle('spin', on);
+    setProgress(on ? 0.3 : 0);
+    $('#shutter').disabled = on;
   }
 
   function enterScan(){
-    state = 'scan'; stableMs = 0; lastTs = 0; prevSample = null; setProgress(0);
-    lastStatus = ''; setStatus(worker ? '把十字對準一個英文單字' : '載入辨識引擎中…（可先對準）');
-  }
-
-  function tick(ts){
-    requestAnimationFrame(tick);
-    if (state !== 'scan' || video.readyState < 2) return;
-    if (lastTs && ts - lastTs < 90) return;
-    const dt = lastTs ? Math.min(ts - lastTs, 200) : 0;
-    lastTs = ts;
-    const { diff, std } = sample();
-    if (diff === null) return;
-
-    if (needsMove) {
-      setProgress(0);
-      if (diff > Math.min(settings.threshold * 2.2, 45)) { needsMove = false; }
-      else { setStatus('移到下一個單字'); return; }
+    state = 'scan'; setBusy(false);
+    lastStatus = '';
+    setStatus('對準單字，按下按鈕擷取');
+    if (!worker && workerPromise) {
+      setStatus('載入辨識引擎中…（可先對準）');
+      workerPromise.then(() => { if (state === 'scan') setStatus('對準單字，按下按鈕擷取'); }).catch(() => {});
     }
-    const hasText = std > 16;
-    if (diff < settings.threshold && hasText) stableMs += dt; else stableMs = 0;
-    const p = Math.min(stableMs / (settings.dwell * 1000), 1);
-    setProgress(p);
-    if (!worker) setStatus('載入辨識引擎中…（可先對準）');
-    else if (!hasText) setStatus('把十字對準一個英文單字');
-    else setStatus(p > 0 ? '保持不動…' : '把十字對準一個英文單字');
-    if (p >= 1) capture();
   }
 
   // ---------- 擷取與辨識 ----------
   async function capture(){
-    if (state === 'busy' || !video.videoWidth) return;
-    state = 'busy'; stableMs = 0; setProgress(1);
+    if (state !== 'scan' || !video.videoWidth) return;
+    state = 'busy';
     cross.classList.remove('hit'); void cross.offsetWidth; cross.classList.add('hit');
+    setBusy(true);
     setStatus('辨識中…');
 
     const r = cropRect();
@@ -401,7 +359,7 @@
     const words = extractWords(data);
     const pick = pickWord(words, c.width / 2, c.height / 2);
     if (!pick) {
-      setProgress(0);
+      setBusy(false);
       setStatus('沒抓到單字，請靠近一點或調整光線', true);
       if (settings.debug) showResult(null, c, data);
       else setTimeout(() => { if (state === 'busy') enterScan(); }, 1500);
@@ -521,7 +479,7 @@
 
   async function showResult(pick, canvas, data){
     state = 'result';
-    setProgress(0);
+    setBusy(false);
     const sheet = $('#resultSheet');
     const dbg = $('#debug');
     dbg.hidden = !settings.debug; dbg.innerHTML = '';
@@ -626,50 +584,30 @@
 
   function closeResult(){
     closeSheets(); current = null;
-    needsMove = true;
-    if ($('#pauseBtn').classList.contains('on')) { state = 'paused'; setStatus('自動偵測已暫停'); }
-    else enterScan();
+    enterScan();
   }
   $('#closeBtn').addEventListener('click', closeResult);
   veil.addEventListener('click', () => { if (state === 'result' || state === 'busy') closeResult(); else closeSettings(); });
 
-  // 手動擷取
-  $('#shutter').addEventListener('click', () => { if (state === 'scan' || state === 'paused') capture(); });
-
-  // 暫停／繼續
-  $('#pauseBtn').addEventListener('click', () => {
-    const b = $('#pauseBtn');
-    if (state === 'scan') {
-      state = 'paused'; b.classList.add('on'); setProgress(0); setStatus('自動偵測已暫停，可按中間鍵手動擷取');
-      $('#pauseIcon').innerHTML = '<polygon points="8,5 19,12 8,19" />';
-    } else if (state === 'paused') {
-      b.classList.remove('on'); $('#pauseIcon').innerHTML = '<line x1="9" y1="6" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="18"/>';
-      enterScan();
-    }
-  });
+  // 擷取按鈕
+  $('#shutter').addEventListener('click', capture);
 
   // ---------- 設定面板 ----------
-  let stateBeforeSettings = 'scan';
-  const dwellEl = $('#dwell'), thrEl = $('#thr');
   function renderSettings(){
-    dwellEl.value = settings.dwell; $('#dwellVal').textContent = Number(settings.dwell).toFixed(1) + ' 秒';
-    thrEl.value = settings.threshold; $('#thrVal').textContent = settings.threshold;
     $('#accent').value = settings.accent;
     $('#autoSpeak').checked = settings.autoSpeak;
     $('#debugChk').checked = settings.debug;
   }
   $('#settingsBtn').addEventListener('click', () => {
     if (state === 'busy' || state === 'result') return;
-    stateBeforeSettings = state; state = 'settings'; setProgress(0);
+    state = 'settings';
     renderSettings(); openSheet($('#settingsSheet'));
   });
   function closeSettings(){
     closeSheets();
-    if (stateBeforeSettings === 'paused') { state = 'paused'; setStatus('自動偵測已暫停'); } else enterScan();
+    enterScan();
   }
   $('#settingsDone').addEventListener('click', closeSettings);
-  dwellEl.addEventListener('input', () => { settings.dwell = +dwellEl.value; $('#dwellVal').textContent = settings.dwell.toFixed(1) + ' 秒'; saveSettings(); });
-  thrEl.addEventListener('input', () => { settings.threshold = +thrEl.value; $('#thrVal').textContent = settings.threshold; saveSettings(); });
   $('#accent').addEventListener('change', e => { settings.accent = e.target.value; saveSettings(); });
   $('#autoSpeak').addEventListener('change', e => { settings.autoSpeak = e.target.checked; saveSettings(); });
   $('#debugChk').addEventListener('change', e => { settings.debug = e.target.checked; saveSettings(); });
