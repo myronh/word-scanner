@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="準星查單字">
+<meta name="theme-color" content="#000000">
+<title>準星查單字</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<style>
+  :root{
+    --accent:#ffd54a;
+    --accent-ink:#1a1400;
+    --sheet:#16171a;
+    --card:#202226;
+    --text:#f2f2f3;
+    --muted:#9a9fa6;
+    --line:rgba(255,255,255,.10);
+    --danger:#ff7a6b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Helvetica Neue",sans-serif;
+    overflow:hidden;-webkit-user-select:none;user-select:none;overscroll-behavior:none}
+  button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+
+  #stage{position:fixed;inset:0;background:#000}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+
+  /* 掃描框 */
+  #scanbox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    border-radius:12px;pointer-events:none;
+    box-shadow:0 0 0 9999px rgba(0,0,0,.28);
+    border:1px solid rgba(255,255,255,.28);transition:border-color .2s}
+  #scanbox.stable{border-color:rgba(255,213,74,.7)}
+
+  /* 十字準星 */
+  #cross{position:absolute;left:50%;top:50%;width:84px;height:84px;
+    transform:translate(-50%,-50%);pointer-events:none;
+    filter:drop-shadow(0 0 2px rgba(0,0,0,.8))}
+  #cross .track{fill:none;stroke:rgba(255,255,255,.18);stroke-width:2.5}
+  #cross .prog{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;
+    transform:rotate(-90deg);transform-origin:42px 42px}
+  #cross line{stroke:#fff;stroke-width:1.8;stroke-linecap:round}
+  #cross circle.dot{fill:var(--accent)}
+  #cross.hit{animation:hit .35s ease-out}
+  @keyframes hit{0%{transform:translate(-50%,-50%) scale(1)}40%{transform:translate(-50%,-50%) scale(1.25)}100%{transform:translate(-50%,-50%) scale(1)}}
+
+  /* 狀態列 */
+  #status{position:absolute;left:50%;top:calc(env(safe-area-inset-top) + 14px);transform:translateX(-50%);
+    padding:8px 16px;border-radius:999px;background:rgba(20,20,22,.72);
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    font-size:14px;letter-spacing:.02em;white-space:nowrap;max-width:calc(100% - 32px);
+    overflow:hidden;text-overflow:ellipsis}
+  #status.warn{color:var(--danger)}
+
+  /* 下方控制列 */
+  #bar{position:absolute;left:0;right:0;bottom:0;
+    padding:0 28px calc(env(safe-area-inset-bottom) + 22px);
+    display:flex;align-items:center;justify-content:space-between}
+  .round{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;
+    background:rgba(20,20,22,.6);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+  .round svg{width:22px;height:22px;stroke:#fff;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  #shutter{width:70px;height:70px;border-radius:50%;border:3px solid rgba(255,255,255,.9);
+    display:grid;place-items:center}
+  #shutter span{width:54px;height:54px;border-radius:50%;background:#fff;transition:transform .12s}
+  #shutter:active span{transform:scale(.88)}
+  #pauseBtn.on{background:var(--accent)}
+  #pauseBtn.on svg{stroke:var(--accent-ink)}
+
+  /* 開始畫面 */
+  #intro{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;justify-content:center;
+    padding:32px 28px calc(env(safe-area-inset-bottom) + 32px);
+    background:radial-gradient(120% 80% at 50% 0%,#24221a 0%,#0c0c0d 60%)}
+  #intro h1{font-size:30px;margin:0 0 10px;letter-spacing:.04em}
+  #intro h1 b{color:var(--accent)}
+  #intro p{color:var(--muted);line-height:1.7;margin:0 0 8px;font-size:15px}
+  #intro ol{color:#d6d7da;line-height:1.9;padding-left:20px;margin:18px 0 28px;font-size:15px}
+  .primary{background:var(--accent);color:var(--accent-ink);font-weight:700;
+    padding:15px 20px;border-radius:14px;font-size:17px;width:100%}
+  .primary:active{opacity:.85}
+  #introErr{color:var(--danger);margin-top:14px;font-size:14px;line-height:1.6;min-height:1em}
+
+  /* 底部面板 */
+  .sheet{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--sheet);
+    border-radius:20px 20px 0 0;max-height:78dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    padding:10px 20px calc(env(safe-area-inset-bottom) + 20px);
+    transform:translateY(105%);transition:transform .28s cubic-bezier(.2,.8,.2,1);
+    box-shadow:0 -10px 40px rgba(0,0,0,.5);-webkit-user-select:text;user-select:text}
+  .sheet.open{transform:none}
+  .grip{width:38px;height:5px;border-radius:3px;background:rgba(255,255,255,.2);margin:0 auto 14px}
+
+  .head{display:flex;align-items:center;gap:12px}
+  .head .w{flex:1;min-width:0}
+  #word{font-size:32px;font-weight:700;margin:0;letter-spacing:.01em;word-break:break-word}
+  #ipa{color:var(--muted);font-size:16px;margin-top:2px;font-family:"Lucida Grande","Arial Unicode MS",sans-serif}
+  #lemmaNote{color:var(--muted);font-size:13px;margin-top:4px}
+  .speak{width:52px;height:52px;border-radius:50%;background:var(--accent);display:grid;place-items:center;flex:none}
+  .speak svg{width:24px;height:24px;fill:var(--accent-ink)}
+  .speak:active{opacity:.8}
+
+  .sec{margin-top:18px}
+  .sec h3{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.12em;margin:0 0 8px}
+  #zh{font-size:20px;line-height:1.5}
+  #zh .alt{color:var(--muted);font-size:15px;margin-left:4px}
+  .pos{background:var(--card);border-radius:12px;padding:12px 14px;margin-bottom:8px}
+  .pos .tag{display:inline-block;font-size:12px;color:var(--accent);border:1px solid rgba(255,213,74,.4);
+    border-radius:6px;padding:1px 7px;margin-bottom:6px}
+  .pos ol{margin:0;padding-left:18px;line-height:1.55;font-size:15px}
+  .pos li+li{margin-top:6px}
+  .pos .ex{color:var(--muted);font-style:italic;font-size:14px;margin-top:2px}
+  .note{color:var(--muted);font-size:12px;line-height:1.6;margin-top:16px}
+  .lowconf{color:var(--danger);font-size:13px;margin-top:4px}
+  .loading{color:var(--muted);font-size:15px}
+  .actions{display:flex;gap:10px;margin-top:18px}
+  .ghost{flex:1;padding:13px;border-radius:12px;background:var(--card);font-size:15px}
+  #debug{margin-top:16px}
+  #debug canvas{width:100%;border-radius:8px;background:#000;display:block}
+  #debug pre{white-space:pre-wrap;font-size:12px;color:var(--muted);margin:8px 0 0}
+
+  /* 設定 */
+  .row{padding:14px 0;border-bottom:1px solid var(--line)}
+  .row:last-of-type{border-bottom:0}
+  .row label{display:flex;justify-content:space-between;align-items:center;font-size:15px}
+  .row .val{color:var(--accent);font-variant-numeric:tabular-nums}
+  .row .hint{color:var(--muted);font-size:12px;margin-top:4px}
+  input[type=range]{width:100%;margin-top:10px;accent-color:var(--accent)}
+  select{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+  input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
+  .sheet h2{font-size:18px;margin:0 0 4px}
+
+  #veil{position:fixed;inset:0;z-index:15;background:rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .2s}
+  #veil.on{opacity:1;pointer-events:auto}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <div id="scanbox"></div>
+  <svg id="cross" viewBox="0 0 84 84" aria-hidden="true">
+    <circle class="track" cx="42" cy="42" r="30"/>
+    <circle class="prog" id="prog" cx="42" cy="42" r="30" stroke-dasharray="188.5" stroke-dashoffset="188.5"/>
+    <line x1="42" y1="20" x2="42" y2="34"/><line x1="42" y1="50" x2="42" y2="64"/>
+    <line x1="20" y1="42" x2="34" y2="42"/><line x1="50" y1="42" x2="64" y2="42"/>
+    <circle class="dot" cx="42" cy="42" r="1.8"/>
+  </svg>
+  <div id="status">準備中…</div>
+  <div id="bar">
+    <button class="round" id="settingsBtn" aria-label="設定">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+    <button id="shutter" aria-label="立即擷取"><span></span></button>
+    <button class="round" id="pauseBtn" aria-label="暫停自動偵測">
+      <svg viewBox="0 0 24 24" id="pauseIcon"><line x1="9" y1="6" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+    </button>
+  </div>
+</div>
+
+<div id="intro">
+  <h1>準星<b>查單字</b></h1>
+  <p>把十字對準書本或螢幕上的英文單字，停住一下就會自動查詢。</p>
+  <ol>
+    <li>按下「開始」並允許使用相機</li>
+    <li>十字對準單字，保持不動</li>
+    <li>黃色圈跑滿就會擷取並顯示翻譯</li>
+  </ol>
+  <button class="primary" id="startBtn">開始</button>
+  <div id="introErr"></div>
+</div>
+
+<div id="veil"></div>
+
+<section class="sheet" id="resultSheet" aria-label="查詢結果">
+  <div class="grip"></div>
+  <div class="head">
+    <div class="w">
+      <h2 id="word" style="font-size:32px"></h2>
+      <div id="ipa"></div>
+      <div id="lemmaNote"></div>
+      <div id="confNote"></div>
+    </div>
+    <button class="speak" id="speakBtn" aria-label="播放發音">
+      <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
+    </button>
+  </div>
+  <div class="sec"><h3>中文翻譯</h3><div id="zh" class="loading">查詢中…</div></div>
+  <div class="sec"><h3>英文說明</h3><div id="en" class="loading">查詢中…</div></div>
+  <div id="debug" hidden></div>
+  <div class="actions"><button class="ghost" id="closeBtn">繼續查詢</button></div>
+  <div class="note">中文：MyMemory 機器翻譯（暫用）｜英文釋義與音標：Free Dictionary API（Wiktionary）</div>
+</section>
+
+<section class="sheet" id="settingsSheet" aria-label="設定">
+  <div class="grip"></div>
+  <h2>設定</h2>
+  <div class="row">
+    <label>停留時間 <span class="val" id="dwellVal"></span></label>
+    <input type="range" id="dwell" min="0.5" max="3" step="0.1">
+    <div class="hint">十字停在單字上多久後自動擷取</div>
+  </div>
+  <div class="row">
+    <label>穩定門檻 <span class="val" id="thrVal"></span></label>
+    <input type="range" id="thr" min="3" max="16" step="1">
+    <div class="hint">數字越大越容易判定為「停住」；手會抖的話可以調高</div>
+  </div>
+  <div class="row">
+    <label>發音 <select id="accent"><option value="en-US">美式</option><option value="en-GB">英式</option></select></label>
+  </div>
+  <div class="row">
+    <label>擷取後自動發音 <input type="checkbox" id="autoSpeak"></label>
+  </div>
+  <div class="row">
+    <label>顯示偵錯資訊 <input type="checkbox" id="debugChk"></label>
+    <div class="hint">在結果中顯示擷取到的影像和辨識出的文字，方便調整</div>
+  </div>
+  <div class="actions"><button class="ghost" id="settingsDone">完成</button></div>
+</section>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const video = $('#video'), statusEl = $('#status'), prog = $('#prog'), cross = $('#cross'), scanbox = $('#scanbox');
+  const CIRC = 188.5;
+
+  // ---------- 設定 ----------
+  const DEFAULTS = { dwell: 1.5, threshold: 7, accent: 'en-US', autoSpeak: true, debug: false };
+  const settings = Object.assign({}, DEFAULTS, loadSettings());
+  function loadSettings(){ try { return JSON.parse(localStorage.getItem('xhair-settings')) || {}; } catch(e){ return {}; } }
+  function saveSettings(){ try { localStorage.setItem('xhair-settings', JSON.stringify(settings)); } catch(e){} }
+
+  // ---------- 狀態 ----------
+  let state = 'idle';            // idle | scan | busy | result | paused | settings
+  let stream = null, worker = null, workerPromise = null;
+  let prevSample = null, stableMs = 0, lastTs = 0, needsMove = false;
+  let current = null;            // 目前查詢結果
+  let lastStatus = '';
+
+  function setStatus(t, warn){
+    if (t === lastStatus) return;
+    lastStatus = t; statusEl.textContent = t; statusEl.classList.toggle('warn', !!warn);
+  }
+  function setProgress(p){ prog.setAttribute('stroke-dashoffset', (CIRC * (1 - p)).toFixed(1)); scanbox.classList.toggle('stable', p > 0); }
+
+  // ---------- 開始 ----------
+  $('#startBtn').addEventListener('click', async () => {
+    $('#introErr').textContent = '';
+    unlockSpeech();
+    initOCR();
+    try {
+      await startCamera();
+      $('#intro').style.display = 'none';
+      enterScan();
+      requestAnimationFrame(tick);
+    } catch (e) {
+      $('#introErr').textContent = cameraErrorText(e);
+    }
+  });
+
+  function cameraErrorText(e){
+    if (!window.isSecureContext) return '相機只能在 HTTPS 網址下使用，請把檔案放到 GitHub Pages 再開啟。';
+    if (e && e.name === 'NotAllowedError') return '相機權限被拒絕。請到「設定 › Safari › 相機」改為「允許」或「詢問」，再重新整理頁面。';
+    if (e && e.name === 'NotFoundError') return '找不到可用的相機。';
+    return '無法開啟相機：' + (e && e.message ? e.message : e);
+  }
+
+  async function startCamera(){
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    video.srcObject = stream;
+    await new Promise(res => { if (video.readyState >= 1) res(); else video.onloadedmetadata = () => res(); });
+    await video.play().catch(() => {});
+    layoutScanbox();
+  }
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden || state === 'idle') return;
+    const track = stream && stream.getVideoTracks()[0];
+    if (!track || track.readyState === 'ended') { try { await startCamera(); } catch(e){ setStatus(cameraErrorText(e), true); } }
+    else video.play().catch(() => {});
+  });
+  window.addEventListener('resize', layoutScanbox);
+  window.addEventListener('orientationchange', () => setTimeout(layoutScanbox, 300));
+
+  // ---------- OCR 引擎 ----------
+  function initOCR(){
+    if (workerPromise) return workerPromise;
+    workerPromise = (async () => {
+      const w = await Tesseract.createWorker('eng', 1);
+      await w.setParameters({
+        tessedit_pageseg_mode: '6',
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'’-.,;:!?\"() ",
+        preserve_interword_spaces: '1'
+      });
+      worker = w;
+      return w;
+    })();
+    workerPromise.catch(() => { workerPromise = null; });
+    return workerPromise;
+  }
+
+  // ---------- 影像區域（video 像素座標）----------
+  function cropRect(){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const cw = window.innerWidth, ch = window.innerHeight;
+    const scale = Math.max(cw / vw, ch / vh);           // object-fit: cover
+    const visW = cw / scale, visH = ch / scale;
+    const w = Math.min(visW * 0.84, vw);
+    const h = Math.min(w * 0.26, visH * 0.4);
+    return { x: (vw - w) / 2, y: (vh - h) / 2, w, h, scale };
+  }
+  function layoutScanbox(){
+    if (!video.videoWidth) return;
+    const r = cropRect();
+    scanbox.style.width = (r.w * r.scale) + 'px';
+    scanbox.style.height = (r.h * r.scale) + 'px';
+  }
+
+  // ---------- 穩定偵測 ----------
+  const SW = 48, SH = 24;
+  const sCanvas = document.createElement('canvas'); sCanvas.width = SW; sCanvas.height = SH;
+  const sctx = sCanvas.getContext('2d', { willReadFrequently: true });
+
+  function sample(){
+    const r = cropRect();
+    const sw = r.w * 0.42, sh = r.h * 0.7;
+    sctx.drawImage(video, (video.videoWidth - sw) / 2, (video.videoHeight - sh) / 2, sw, sh, 0, 0, SW, SH);
+    const d = sctx.getImageData(0, 0, SW, SH).data;
+    const g = new Float32Array(SW * SH);
+    let sum = 0;
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) { g[j] = d[i] * .299 + d[i+1] * .587 + d[i+2] * .114; sum += g[j]; }
+    const mean = sum / g.length;
+    let v = 0; for (let j = 0; j < g.length; j++) v += (g[j] - mean) ** 2;
+    const std = Math.sqrt(v / g.length);
+    let diff = null;
+    if (prevSample) { let s = 0; for (let j = 0; j < g.length; j++) s += Math.abs(g[j] - prevSample[j]); diff = s / g.length; }
+    prevSample = g;
+    return { diff, std };
+  }
+
+  function enterScan(){
+    state = 'scan'; stableMs = 0; lastTs = 0; prevSample = null; setProgress(0);
+    lastStatus = ''; setStatus(worker ? '把十字對準一個英文單字' : '載入辨識引擎中…（可先對準）');
+  }
+
+  function tick(ts){
+    requestAnimationFrame(tick);
+    if (state !== 'scan' || video.readyState < 2) return;
+    if (lastTs && ts - lastTs < 90) return;
+    const dt = lastTs ? Math.min(ts - lastTs, 200) : 0;
+    lastTs = ts;
+    const { diff, std } = sample();
+    if (diff === null) return;
+
+    if (needsMove) {
+      setProgress(0);
+      if (diff > settings.threshold * 2.2) { needsMove = false; }
+      else { setStatus('移到下一個單字'); return; }
+    }
+    const hasText = std > 16;
+    if (diff < settings.threshold && hasText) stableMs += dt; else stableMs = 0;
+    const p = Math.min(stableMs / (settings.dwell * 1000), 1);
+    setProgress(p);
+    if (!worker) setStatus('載入辨識引擎中…（可先對準）');
+    else if (!hasText) setStatus('把十字對準一個英文單字');
+    else setStatus(p > 0 ? '保持不動…' : '把十字對準一個英文單字');
+    if (p >= 1) capture();
+  }
+
+  // ---------- 擷取與辨識 ----------
+  async function capture(){
+    if (state === 'busy' || !video.videoWidth) return;
+    state = 'busy'; stableMs = 0; setProgress(1);
+    cross.classList.remove('hit'); void cross.offsetWidth; cross.classList.add('hit');
+    setStatus('辨識中…');
+
+    const r = cropRect();
+    const k = Math.max(1, Math.min(2.5, 1400 / r.w));
+    const c = document.createElement('canvas');
+    c.width = Math.round(r.w * k); c.height = Math.round(r.h * k);
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    x.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+    enhance(x, c.width, c.height);
+
+    let data;
+    try {
+      if (!worker) { setStatus('等待辨識引擎載入…'); await initOCR(); }
+      ({ data } = await worker.recognize(c, {}, { text: true, blocks: true }));
+    } catch (e) {
+      setStatus('辨識失敗：' + (e && e.message ? e.message : e), true);
+      setTimeout(enterScan, 1800);
+      return;
+    }
+
+    const words = extractWords(data);
+    const pick = pickWord(words, c.width / 2, c.height / 2);
+    if (!pick) {
+      setProgress(0);
+      setStatus('沒抓到單字，請靠近一點或調整光線', true);
+      if (settings.debug) showResult(null, c, data);
+      else setTimeout(() => { if (state === 'busy') enterScan(); }, 1500);
+      return;
+    }
+    showResult(pick, c, data);
+  }
+
+  // 灰階 + 對比拉伸
+  function enhance(ctx, w, h){
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const hist = new Uint32Array(256), n = w * h;
+    for (let i = 0; i < d.length; i += 4) { const g = (d[i] * .299 + d[i+1] * .587 + d[i+2] * .114) | 0; d[i] = g; hist[g]++; }
+    let lo = 0, hi = 255, acc = 0;
+    for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc > n * .02) { lo = i; break; } }
+    acc = 0;
+    for (let i = 255; i >= 0; i--) { acc += hist[i]; if (acc > n * .02) { hi = i; break; } }
+    const span = Math.max(hi - lo, 1);
+    for (let i = 0; i < d.length; i += 4) {
+      let g = (d[i] - lo) * 255 / span; g = g < 0 ? 0 : g > 255 ? 255 : g;
+      d[i] = d[i+1] = d[i+2] = g;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function extractWords(data){
+    if (data && Array.isArray(data.words) && data.words.length) return data.words;
+    const out = [];
+    ((data && data.blocks) || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => (l.words || []).forEach(w => out.push(w)))));
+    return out;
+  }
+
+  function pickWord(words, cx, cy){
+    let best = null, bestD = Infinity;
+    for (const w of words) {
+      const m = (w.text || '').replace(/’/g, "'").match(/[A-Za-z]+(?:['-][A-Za-z]+)*/);
+      if (!m || !w.bbox) continue;
+      const b = w.bbox, h = b.y1 - b.y0;
+      const dx = cx < b.x0 ? b.x0 - cx : cx > b.x1 ? cx - b.x1 : 0;
+      const dy = cy < b.y0 ? b.y0 - cy : cy > b.y1 ? cy - b.y1 : 0;
+      const dist = Math.hypot(dx, dy * 1.5);
+      if (dist < bestD) { bestD = dist; best = { text: m[0], conf: w.confidence, h, dist }; }
+    }
+    if (!best || best.dist > Math.max(best.h * 1.2, 24)) return null;
+    return best;
+  }
+
+  // ---------- 字典查詢 ----------
+  function candidates(word){
+    const w = word.toLowerCase().replace(/'s$/, '');
+    const c = [w];
+    const add = s => { if (s && s.length > 1 && !c.includes(s)) c.push(s); };
+    if (/ies$/.test(w)) add(w.slice(0, -3) + 'y');
+    if (/ied$/.test(w)) add(w.slice(0, -3) + 'y');
+    if (/(ches|shes|sses|xes|zes|oes)$/.test(w)) add(w.slice(0, -2));
+    if (/s$/.test(w) && !/ss$/.test(w)) add(w.slice(0, -1));
+    if (/ed$/.test(w)) { add(w.slice(0, -1)); add(w.slice(0, -2)); if (/([b-df-hj-np-tv-z])\1ed$/.test(w)) add(w.slice(0, -3)); }
+    if (/ing$/.test(w)) { add(w.slice(0, -3)); add(w.slice(0, -3) + 'e'); if (/([b-df-hj-np-tv-z])\1ing$/.test(w)) add(w.slice(0, -4)); }
+    if (/ily$/.test(w)) add(w.slice(0, -3) + 'y');
+    if (/ly$/.test(w)) add(w.slice(0, -2));
+    if (/est$/.test(w)) add(w.slice(0, -3));
+    if (/er$/.test(w)) add(w.slice(0, -2));
+    return c.slice(0, 6);
+  }
+
+  async function fetchDict(word){
+    for (const c of candidates(word)) {
+      const r = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(c));
+      if (r.ok) { const j = await r.json(); if (Array.isArray(j) && j.length) return { lemma: c, entries: j }; }
+      else if (r.status !== 404) throw new Error('字典服務回應 ' + r.status);
+    }
+    return null;
+  }
+
+  async function fetchZh(word){
+    const r = await fetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(word) + '&langpair=en|zh-TW');
+    if (!r.ok) throw new Error('翻譯服務回應 ' + r.status);
+    const j = await r.json();
+    const list = [];
+    const push = t => {
+      t = (t || '').trim().replace(/[。.]$/, '');
+      if (!t || t.length > 24 || /[A-Za-z]{3,}/.test(t) || list.includes(t)) return;
+      list.push(t);
+    };
+    push(j.responseData && j.responseData.translatedText);
+    (j.matches || []).slice().sort((a, b) => (b.match || 0) - (a.match || 0)).forEach(m => push(m.translation));
+    return list.slice(0, 4);
+  }
+
+  const POS = { noun:'名詞', verb:'動詞', adjective:'形容詞', adverb:'副詞', pronoun:'代名詞',
+    preposition:'介系詞', conjunction:'連接詞', interjection:'感嘆詞', determiner:'限定詞', article:'冠詞', numeral:'數詞' };
+
+  function parseDict(res){
+    const accentKey = settings.accent === 'en-GB' ? '-uk' : '-us';
+    let ipa = '', audio = '', audioAny = '';
+    const groups = new Map();
+    for (const e of res.entries) {
+      for (const p of (e.phonetics || [])) {
+        if (p.audio) {
+          if (!audioAny) audioAny = p.audio;
+          if (!audio && p.audio.includes(accentKey)) { audio = p.audio; if (p.text) ipa = p.text; }
+        }
+      }
+      if (!ipa) ipa = e.phonetic || ((e.phonetics || []).find(p => p.text) || {}).text || '';
+      for (const m of (e.meanings || [])) {
+        const k = m.partOfSpeech || '';
+        if (!groups.has(k)) groups.set(k, []);
+        const arr = groups.get(k);
+        for (const d of (m.definitions || [])) if (arr.length < 3) arr.push(d);
+      }
+    }
+    return { ipa, audio: audio || audioAny, groups: [...groups.entries()].slice(0, 4) };
+  }
+
+  // ---------- 顯示結果 ----------
+  const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+
+  async function showResult(pick, canvas, data){
+    state = 'result';
+    setProgress(0);
+    const sheet = $('#resultSheet');
+    const dbg = $('#debug');
+    dbg.hidden = !settings.debug; dbg.innerHTML = '';
+    if (settings.debug) {
+      canvas.removeAttribute('style'); dbg.appendChild(canvas);
+      const pre = document.createElement('pre');
+      pre.textContent = '辨識文字：' + ((data && data.text) || '').trim() + (pick ? '\n選中：' + pick.text + '（信心 ' + Math.round(pick.conf) + '）' : '\n選中：（無）');
+      dbg.appendChild(pre);
+    }
+
+    if (!pick) {
+      current = null;
+      $('#word').textContent = '（沒抓到單字）';
+      $('#ipa').textContent = ''; $('#lemmaNote').textContent = ''; $('#confNote').innerHTML = '';
+      $('#zh').className = 'loading'; $('#zh').textContent = '—';
+      $('#en').className = 'loading'; $('#en').textContent = '請靠近一點、讓單字更清楚，或改善光線後再試。';
+      openSheet(sheet); return;
+    }
+
+    current = { word: pick.text, lemma: pick.text.toLowerCase(), audio: '' };
+    $('#word').textContent = pick.text;
+    $('#ipa').textContent = '';
+    $('#lemmaNote').textContent = '';
+    $('#confNote').innerHTML = pick.conf < 60 ? '<div class="lowconf">辨識信心較低，結果可能不正確</div>' : '';
+    $('#zh').className = 'loading'; $('#zh').textContent = '查詢中…';
+    $('#en').className = 'loading'; $('#en').textContent = '查詢中…';
+    openSheet(sheet);
+    setStatus('已擷取：' + pick.text);
+    if (settings.autoSpeak) tts(pick.text);
+
+    const token = current;
+    let lemma = pick.text.toLowerCase();
+    try {
+      const res = await fetchDict(pick.text);
+      if (token !== current) return;
+      if (res) {
+        lemma = res.lemma; current.lemma = lemma;
+        const d = parseDict(res);
+        current.audio = d.audio;
+        $('#ipa').textContent = d.ipa;
+        if (lemma !== pick.text.toLowerCase()) $('#lemmaNote').textContent = '原形：' + lemma;
+        $('#en').className = '';
+        $('#en').innerHTML = d.groups.map(([pos, defs]) =>
+          '<div class="pos"><span class="tag">' + esc(pos) + (POS[pos] ? ' · ' + POS[pos] : '') + '</span><ol>' +
+          defs.map(df => '<li>' + esc(df.definition) + (df.example ? '<div class="ex">' + esc(df.example) + '</div>' : '') + '</li>').join('') +
+          '</ol></div>').join('') || '<span class="loading">沒有英文釋義</span>';
+      } else {
+        $('#en').className = 'loading';
+        $('#en').textContent = '字典裡找不到這個字（可能是專有名詞，或辨識有誤）。';
+      }
+    } catch (e) {
+      if (token !== current) return;
+      $('#en').className = 'loading';
+      $('#en').textContent = '英文字典查詢失敗：' + e.message;
+    }
+
+    try {
+      const zh = await fetchZh(lemma);
+      if (token !== current) return;
+      $('#zh').className = '';
+      $('#zh').innerHTML = zh.length
+        ? esc(zh[0]) + (zh.length > 1 ? '<span class="alt">' + zh.slice(1).map(esc).join('；') + '</span>' : '')
+        : '<span class="loading">沒有找到翻譯</span>';
+    } catch (e) {
+      if (token !== current) return;
+      $('#zh').className = 'loading';
+      $('#zh').textContent = '中文翻譯查詢失敗：' + e.message;
+    }
+  }
+
+  // ---------- 發音 ----------
+  function unlockSpeech(){
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch(e){}
+  }
+  function pickVoice(){
+    try {
+      const vs = speechSynthesis.getVoices().filter(v => v.lang.replace('_', '-') === settings.accent);
+      return vs.find(v => /Samantha|Daniel|Karen|Alex/.test(v.name)) || vs[0] || null;
+    } catch(e){ return null; }
+  }
+  function tts(text){
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = settings.accent; u.rate = 0.9;
+      const v = pickVoice(); if (v) u.voice = v;
+      speechSynthesis.speak(u);
+    } catch(e){}
+  }
+  $('#speakBtn').addEventListener('click', () => {
+    if (!current) return;
+    if (current.audio) {
+      const a = new Audio(current.audio);
+      a.play().catch(() => tts(current.lemma || current.word));
+    } else tts(current.lemma || current.word);
+  });
+
+  // ---------- 面板 ----------
+  const veil = $('#veil');
+  function openSheet(s){ s.classList.add('open'); veil.classList.add('on'); }
+  function closeSheets(){ document.querySelectorAll('.sheet').forEach(s => s.classList.remove('open')); veil.classList.remove('on'); }
+
+  function closeResult(){
+    closeSheets(); current = null;
+    needsMove = true;
+    if ($('#pauseBtn').classList.contains('on')) { state = 'paused'; setStatus('自動偵測已暫停'); }
+    else enterScan();
+  }
+  $('#closeBtn').addEventListener('click', closeResult);
+  veil.addEventListener('click', () => { if (state === 'result' || state === 'busy') closeResult(); else closeSettings(); });
+
+  // 手動擷取
+  $('#shutter').addEventListener('click', () => { if (state === 'scan' || state === 'paused') capture(); });
+
+  // 暫停／繼續
+  $('#pauseBtn').addEventListener('click', () => {
+    const b = $('#pauseBtn');
+    if (state === 'scan') {
+      state = 'paused'; b.classList.add('on'); setProgress(0); setStatus('自動偵測已暫停，可按中間鍵手動擷取');
+      $('#pauseIcon').innerHTML = '<polygon points="8,5 19,12 8,19" />';
+    } else if (state === 'paused') {
+      b.classList.remove('on'); $('#pauseIcon').innerHTML = '<line x1="9" y1="6" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="18"/>';
+      enterScan();
+    }
+  });
+
+  // ---------- 設定面板 ----------
+  let stateBeforeSettings = 'scan';
+  const dwellEl = $('#dwell'), thrEl = $('#thr');
+  function renderSettings(){
+    dwellEl.value = settings.dwell; $('#dwellVal').textContent = Number(settings.dwell).toFixed(1) + ' 秒';
+    thrEl.value = settings.threshold; $('#thrVal').textContent = settings.threshold;
+    $('#accent').value = settings.accent;
+    $('#autoSpeak').checked = settings.autoSpeak;
+    $('#debugChk').checked = settings.debug;
+  }
+  $('#settingsBtn').addEventListener('click', () => {
+    if (state === 'busy' || state === 'result') return;
+    stateBeforeSettings = state; state = 'settings'; setProgress(0);
+    renderSettings(); openSheet($('#settingsSheet'));
+  });
+  function closeSettings(){
+    closeSheets();
+    if (stateBeforeSettings === 'paused') { state = 'paused'; setStatus('自動偵測已暫停'); } else enterScan();
+  }
+  $('#settingsDone').addEventListener('click', closeSettings);
+  dwellEl.addEventListener('input', () => { settings.dwell = +dwellEl.value; $('#dwellVal').textContent = settings.dwell.toFixed(1) + ' 秒'; saveSettings(); });
+  thrEl.addEventListener('input', () => { settings.threshold = +thrEl.value; $('#thrVal').textContent = settings.threshold; saveSettings(); });
+  $('#accent').addEventListener('change', e => { settings.accent = e.target.value; saveSettings(); });
+  $('#autoSpeak').addEventListener('change', e => { settings.autoSpeak = e.target.checked; saveSettings(); });
+  $('#debugChk').addEventListener('change', e => { settings.debug = e.target.checked; saveSettings(); });
+})();
+</script>
+</body>
+</html>
