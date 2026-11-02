@@ -198,12 +198,12 @@
   <h2>設定</h2>
   <div class="row">
     <label>停留時間 <span class="val" id="dwellVal"></span></label>
-    <input type="range" id="dwell" min="0.5" max="3" step="0.1">
+    <input type="range" id="dwell" min="0.2" max="3" step="0.1">
     <div class="hint">十字停在單字上多久後自動擷取</div>
   </div>
   <div class="row">
     <label>穩定門檻 <span class="val" id="thrVal"></span></label>
-    <input type="range" id="thr" min="3" max="16" step="1">
+    <input type="range" id="thr" min="3" max="40" step="1">
     <div class="hint">數字越大越容易判定為「停住」；手會抖的話可以調高</div>
   </div>
   <div class="row">
@@ -359,7 +359,7 @@
 
     if (needsMove) {
       setProgress(0);
-      if (diff > settings.threshold * 2.2) { needsMove = false; }
+      if (diff > Math.min(settings.threshold * 2.2, 45)) { needsMove = false; }
       else { setStatus('移到下一個單字'); return; }
     }
     const hasText = std > 16;
