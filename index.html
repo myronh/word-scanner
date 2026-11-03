@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="準星查單字">
@@ -24,10 +24,17 @@
   html,body{margin:0;height:100%;background:#000;color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Helvetica Neue",sans-serif;
     overflow:hidden;-webkit-user-select:none;user-select:none;overscroll-behavior:none}
-  button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+  button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;touch-action:manipulation}
 
-  #stage{position:fixed;inset:0;background:#000}
-  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  #stage{position:fixed;inset:0;background:#000;overflow:hidden;touch-action:none}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform-origin:50% 50%}
+  #zoomLabel{position:absolute;left:50%;transform:translateX(-50%);
+    bottom:calc(env(safe-area-inset-bottom) + 112px);
+    padding:6px 14px;border-radius:999px;background:rgba(20,20,22,.72);
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    font-size:14px;font-weight:600;color:var(--accent);font-variant-numeric:tabular-nums}
+  #zoomLabel[hidden]{display:none}
+  .sheet{touch-action:pan-y}
 
   /* 掃描框 */
   #scanbox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
@@ -152,6 +159,7 @@
     <circle class="dot" cx="42" cy="42" r="1.8"/>
   </svg>
   <div id="status">準備中…</div>
+  <button id="zoomLabel" hidden aria-label="恢復原始大小">1.0×</button>
   <div id="bar">
     <button class="round" id="settingsBtn" aria-label="設定">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -266,8 +274,71 @@
     video.srcObject = stream;
     await new Promise(res => { if (video.readyState >= 1) res(); else video.onloadedmetadata = () => res(); });
     await video.play().catch(() => {});
+    setupZoom();
     layoutScanbox();
   }
+
+  // ---------- 影像縮放（只縮放相機畫面）----------
+  let zoom = 1, hwZoom = null, pendingHw = null, hwBusy = false;
+  const zoomLabel = $('#zoomLabel');
+  const zMin = () => hwZoom ? hwZoom.min : 1;
+  const zMax = () => hwZoom ? hwZoom.max : 5;
+
+  function setupZoom(){
+    hwZoom = null; video.style.transform = '';
+    try {
+      const t = stream.getVideoTracks()[0];
+      const caps = t.getCapabilities ? t.getCapabilities() : {};
+      if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+        hwZoom = { track: t, min: caps.zoom.min, max: Math.min(caps.zoom.max, caps.zoom.min * 8) };
+      }
+    } catch(e){}
+    zoom = zMin();
+    updateZoomLabel();
+  }
+
+  function applyZoom(z){
+    zoom = Math.min(zMax(), Math.max(zMin(), z));
+    if (hwZoom) { pendingHw = zoom; pumpHw(); }
+    else video.style.transform = zoom > 1.001 ? 'scale(' + zoom.toFixed(3) + ')' : '';
+    updateZoomLabel();
+    layoutScanbox();
+  }
+
+  async function pumpHw(){
+    if (hwBusy) return;
+    hwBusy = true;
+    while (pendingHw !== null) {
+      const z = pendingHw; pendingHw = null;
+      try { await hwZoom.track.applyConstraints({ advanced: [{ zoom: z }] }); }
+      catch(e) { hwZoom = null; pendingHw = null; zoom = Math.min(5, Math.max(1, z)); video.style.transform = 'scale(' + zoom + ')'; updateZoomLabel(); break; }
+    }
+    hwBusy = false;
+  }
+
+  function updateZoomLabel(){
+    const rel = zoom / zMin();
+    zoomLabel.textContent = rel.toFixed(1) + '×';
+    zoomLabel.hidden = rel < 1.05;
+  }
+  zoomLabel.addEventListener('click', () => applyZoom(zMin()));
+
+  // 雙指縮放
+  const stage = $('#stage');
+  let pinch = null;
+  const tdist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  stage.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) { e.preventDefault(); pinch = { d: tdist(e.touches), z: zoom }; }
+  }, { passive: false });
+  stage.addEventListener('touchmove', e => {
+    if (pinch && e.touches.length === 2) { e.preventDefault(); applyZoom(pinch.z * tdist(e.touches) / pinch.d); }
+  }, { passive: false });
+  stage.addEventListener('touchend', e => { if (e.touches.length < 2) pinch = null; });
+  stage.addEventListener('touchcancel', () => { pinch = null; });
+
+  // 阻止 Safari 整頁縮放
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(n =>
+    document.addEventListener(n, e => e.preventDefault(), { passive: false }));
 
   document.addEventListener('visibilitychange', async () => {
     if (document.hidden || state === 'idle') return;
@@ -299,7 +370,8 @@
   function cropRect(){
     const vw = video.videoWidth, vh = video.videoHeight;
     const cw = window.innerWidth, ch = window.innerHeight;
-    const scale = Math.max(cw / vw, ch / vh);           // object-fit: cover
+    const dz = hwZoom ? 1 : zoom;                        // 數位縮放時，擷取範圍跟著縮小
+    const scale = Math.max(cw / vw, ch / vh) * dz;      // object-fit: cover × 縮放
     const visW = cw / scale, visH = ch / scale;
     const w = Math.min(visW * 0.84, vw);
     const h = Math.min(w * 0.26, visH * 0.4);
